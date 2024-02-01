@@ -6,6 +6,4 @@ fn add(a: i64, b: i64) -> i64 {
 }
 
 // specify all imported functions from modules we want exposed over NIF
-rustler::init!("Elixir.Cozonomono.Cozo", [
-    add
-]);
+rustler::init!("Elixir.Cozonomono.Native", [add]);
