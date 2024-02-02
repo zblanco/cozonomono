@@ -32,6 +32,7 @@ defmodule Cozonomono.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
+      {:jason, "~> 1.0"},
       {:rustler_precompiled, "~> 0.7"},
       {:rustler, "~> 0.30.0", optional: not (@dev? or @force_build?)}
     ]
