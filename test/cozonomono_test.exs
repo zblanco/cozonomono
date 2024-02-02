@@ -10,7 +10,7 @@ defmodule CozonomonoTest do
   test "can execute basic queries" do
     {:ok, instance} = Cozonomono.new()
 
-    assert Cozonomono.simple_query(instance, "?[] <- [['hello', 'world', 'Cozo!']]") ==
+    assert Cozonomono.query(instance, "?[] <- [['hello', 'world', 'Cozo!']]") ==
              {:ok,
               %{
                 "headers" => ["_0", "_1", "_2"],
@@ -22,12 +22,24 @@ defmodule CozonomonoTest do
   test "can handle many data types" do
     {:ok, instance} = Cozonomono.new()
 
-    assert Cozonomono.simple_query(instance, "?[] <- [['hello', 100, 100.0, [1, 2, 3]]]") ==
+    assert Cozonomono.query(instance, "?[] <- [['hello', 100, 100.0, [1, 2, 3]]]") ==
              {:ok,
               %{
                 "headers" => ["_0", "_1", "_2", "_3"],
                 "next" => nil,
                 "rows" => [["hello", 100, 100.0, [1, 2, 3]]]
+              }}
+  end
+
+  test "can use params" do
+    {:ok, instance} = Cozonomono.new()
+
+    assert Cozonomono.query(instance, "?[] <- [['hello', $name]]", params: %{"name" => "Chris"}) ==
+             {:ok,
+              %{
+                "headers" => ["_0", "_1"],
+                "next" => nil,
+                "rows" => [["hello", "Chris"]]
               }}
   end
 end

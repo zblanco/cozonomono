@@ -1,5 +1,5 @@
 use cozo::{DataValue, DbInstance, NamedRows};
-use rustler::{Encoder, Env, NifStruct, ResourceArc, Term};
+use rustler::{Decoder, Encoder, Env, NifResult, NifStruct, ResourceArc, Term};
 use std::ops::Deref;
 
 pub struct ExDbInstanceRef(pub DbInstance);
@@ -120,6 +120,48 @@ impl Encoder for ExDataValue {
             DataValue::Json(cozo::JsonData(json)) => json.to_string().encode(env),
             // Encode undefined values as nils
             _ => "nil".encode(env),
+        }
+    }
+}
+
+impl<'a> Decoder<'a> for ExDataValue {
+    fn decode(term: Term<'a>) -> NifResult<Self> {
+        match term.get_type() {
+            // Match against the term type and decode accordingly
+            rustler::TermType::Atom => {
+                if term.atom_to_string()?.to_lowercase() == "nil" {
+                    Ok(ExDataValue(DataValue::Null))
+                } else {
+                    Err(rustler::Error::Atom("unexpected_atom"))
+                }
+            }
+            rustler::TermType::List => {
+                let list = term.decode::<Vec<Term>>()?;
+                let decoded_list = list
+                    .iter()
+                    .map(|item| ExDataValue::decode(*item))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(ExDataValue(DataValue::List(
+                    decoded_list.into_iter().map(|ev| ev.0).collect(),
+                )))
+            }
+            _ => {
+                // Directly attempt to decode known types, fallback to complex type handling
+                let decoded = if let Ok(value) = term.decode::<bool>() {
+                    ExDataValue(DataValue::Bool(value))
+                } else if let Ok(value) = term.decode::<i64>() {
+                    ExDataValue(DataValue::Num(cozo::Num::Int(value)))
+                } else if let Ok(value) = term.decode::<f64>() {
+                    ExDataValue(DataValue::Num(cozo::Num::Float(value)))
+                } else if let Ok(value) = term.decode::<String>() {
+                    // Additional logic needed here for Uuid, Regex, Json
+                    ExDataValue(DataValue::Str(value.into()))
+                } else {
+                    // Handle other complex types like Bytes, Vec, Uuid, Regex, and Json here
+                    return Err(rustler::Error::Atom("unsupported_type"));
+                };
+                Ok(decoded)
+            }
         }
     }
 }
