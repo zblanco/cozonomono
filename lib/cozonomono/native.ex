@@ -15,4 +15,8 @@ defmodule Cozonomono.Native do
       Enum.uniq(["aarch64-unknown-linux-musl" | RustlerPrecompiled.Config.default_targets()]),
     version: version,
     mode: mode
+
+  def create_instance(_engine, _path), do: err()
+  def run_default(_instance, _payload), do: err()
+  defp err, do: :erlang.nif_error(:nif_not_loaded)
 end
