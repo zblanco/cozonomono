@@ -18,5 +18,6 @@ defmodule Cozonomono.Native do
 
   def create_instance(_engine, _path), do: err()
   def run_default(_instance, _payload), do: err()
+  def run_script(_instance, _payload, _params, _immutable?), do: err()
   defp err, do: :erlang.nif_error(:nif_not_loaded)
 end
