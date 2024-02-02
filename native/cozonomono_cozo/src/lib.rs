@@ -1,7 +1,7 @@
 mod datatypes;
 mod error;
 
-pub use datatypes::{ExDbInstance, ExDbInstanceRef};
+pub use datatypes::{ExDbInstance, ExDbInstanceRef, ExNamedRows};
 pub use error::ExError;
 use rustler::{Env, Term};
 
@@ -18,8 +18,8 @@ fn create_instance(engine: String, path: String) -> Result<ExDbInstance, ExError
 }
 
 #[rustler::nif(schedule = "DirtyCpu")]
-fn run_default(instance: ExDbInstance, payload: String) -> Result<String, ExError> {
-    Ok(instance.run_default(&payload)?.into_json().to_string())
+fn run_default(instance: ExDbInstance, payload: String) -> Result<ExNamedRows, ExError> {
+    Ok(ExNamedRows(instance.run_default(&payload)?))
 }
 
 rustler::init!(

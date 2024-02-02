@@ -17,8 +17,5 @@ defmodule Cozonomono do
 
   @spec simple_query(instance :: Instance.t(), query :: String.t()) ::
           {:ok, [map()]} | {:error, term()}
-  def simple_query(instance, query) do
-    {:ok, json} = Native.run_default(instance, query)
-    Jason.decode(json)
-  end
+  def simple_query(instance, query), do: Native.run_default(instance, query)
 end
