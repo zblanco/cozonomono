@@ -3,8 +3,18 @@ defmodule CozonomonoTest do
   alias Cozonomono.Instance
   doctest Cozonomono
 
-  test "can create an instance" do
-    assert {:ok, %Instance{path: "", resource: _, engine: "mem"}} = Cozonomono.new()
+  describe "basic instance functionality" do
+    test "can create an instance" do
+      assert {:ok, %Instance{path: "", resource: _, engine: "mem"}} = Cozonomono.new()
+    end
+
+    @tag :tmp_dir
+    test "can use sqlite", %{tmp_dir: tmp_dir} do
+      db_path = Path.join(tmp_dir, "test.db")
+
+      assert {:ok, %Instance{path: ^db_path, resource: _, engine: "sqlite"}} =
+               Cozonomono.new(:sqlite, db_path)
+    end
   end
 
   test "can execute basic queries" do
