@@ -10,6 +10,11 @@ mod atoms {
         error,
         validity,
         json,
+        named_rows_struct = "Elixir.Cozonomono.NamedRows",
+        __struct__,
+        headers,
+        rows,
+        next,
     }
 }
 
@@ -81,11 +86,13 @@ impl Encoder for ExNamedRows {
         };
 
         let map = rustler::Term::map_new(env)
-            .map_put("headers".encode(env), headers)
+            .map_put(atoms::__struct__().encode(env), atoms::named_rows_struct().encode(env))
+            .expect("Failed to encode __struct__")
+            .map_put(atoms::headers().encode(env), headers)
             .expect("Failed to encode headers")
-            .map_put("rows".encode(env), rows_term)
+            .map_put(atoms::rows().encode(env), rows_term)
             .expect("Failed to encode rows")
-            .map_put("next".encode(env), next)
+            .map_put(atoms::next().encode(env), next)
             .expect("Failed to encode next");
 
         map

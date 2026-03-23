@@ -46,8 +46,17 @@ fn run_script(
     ))
 }
 
+#[rustler::nif]
+fn close_instance(instance: ExDbInstance) -> Result<rustler::Atom, ExError> {
+    // Dropping the ExDbInstance causes the ResourceArc reference count to decrement.
+    // If this is the last reference, the inner DbInstance is dropped, releasing
+    // all resources (file handles, locks, memory).
+    drop(instance);
+    Ok(rustler::types::atom::ok())
+}
+
 rustler::init!(
     "Elixir.Cozonomono.Native",
-    [create_instance, run_default, run_script],
+    [create_instance, run_default, run_script, close_instance],
     load = on_load
 );

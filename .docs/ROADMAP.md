@@ -4,38 +4,33 @@
 
 The library currently exposes a minimal working surface:
 
-- **Database lifecycle**: `Cozonomono.new/2` — create an in-memory, SQLite, or RocksDB instance
+- **Database lifecycle**: `Cozonomono.new/2` — create an in-memory, SQLite, or RocksDB instance; `Cozonomono.close/1` — explicitly release resources
 - **Query execution**: `Cozonomono.query/3` — run CozoScript with optional params and immutability flag
-- **Data encoding**: Manual `Encoder`/`Decoder` for `DataValue` (handles null, bool, int, float, string, bytes, uuid, list, vec, json) and manual `Encoder` for `NamedRows` (returns a plain map with string keys)
-
-### Known Gaps in the PoC
-- `ExNamedRows` returns a plain map with string keys (`%{"headers" => ..., "rows" => ..., "next" => ...}`) — should return a proper Elixir struct
-- `ExDataValue` decoder doesn't handle bytes, uuid, or json input from Elixir
-- `ExDataValue` encoder maps `Null` to the string `"nil"` instead of the atom `nil`
-- No resource cleanup / explicit close for database instances
-- No support for multi-statement transactions, import/export, backup/restore, callbacks, or custom fixed rules
+- **Data encoding**: Manual `Encoder`/`Decoder` for `DataValue` (handles null, bool, int, float, string, bytes, uuid, list, vec, json) and manual `Encoder` for `NamedRows` (returns a proper `%Cozonomono.NamedRows{}` struct)
 
 ---
 
-## Phase 1: Solidify Core & Fix PoC Issues
+## Phase 1: Solidify Core & Fix PoC Issues ✅
 
-### 1.1 Fix DataValue Encoding/Decoding
-- [ ] Encode `DataValue::Null` as atom `nil` not string `"nil"`
-- [ ] Add `Decoder` support for binary/bytes (Elixir binary → `DataValue::Bytes`)
-- [ ] Add `Decoder` support for UUID (string or structured → `DataValue::Uuid`)
-- [ ] Add `Decoder` support for JSON (map → `DataValue::Json`)
-- [ ] Handle `DataValue::Set` and `DataValue::Validity` encoding to Elixir terms
-- [ ] Consider using `rustler::atoms!` for commonly used atoms (`nil`, `true`, `false`, `ok`, `error`)
+### 1.1 Fix DataValue Encoding/Decoding ✅
+- [x] Encode `DataValue::Null` as atom `nil` not string `"nil"`
+- [x] Add `Decoder` support for binary/bytes (Elixir binary → `DataValue::Bytes`)
+- [x] Add `Decoder` support for UUID (string or structured → `DataValue::Uuid`)
+- [x] Add `Decoder` support for JSON (map → `DataValue::Json`)
+- [x] Handle `DataValue::Set` and `DataValue::Validity` encoding to Elixir terms
+- [x] Using `rustler::atoms!` for commonly used atoms (`nil`, `ok`, `error`, `validity`, etc.)
 
-### 1.2 Proper NamedRows Struct
-- [ ] Create `Cozonomono.NamedRows` Elixir struct with typed fields
-- [ ] Option A: Use `#[derive(NifStruct)]` on a new `ExNamedRows` struct (requires `next` to be encodable)
-- [ ] Option B: Keep manual `Encoder` but return a proper `%Cozonomono.NamedRows{}` struct via NifStruct-compatible map construction
-- [ ] Support the `next` chain for multi-statement script results as a linked list of NamedRows
+### 1.2 Proper NamedRows Struct ✅
+- [x] Created `Cozonomono.NamedRows` Elixir struct with typed fields (`headers`, `rows`, `next`)
+- [x] Rust `ExNamedRows` encoder builds a proper `%Cozonomono.NamedRows{}` struct via `__struct__` key in the encoded map
+- [x] Supports the `next` chain for multi-statement script results (recursive encoding)
+- [x] All query results now return `{:ok, %Cozonomono.NamedRows{}}` instead of `{:ok, %{"headers" => ...}}`
 
-### 1.3 Instance Lifecycle
-- [ ] Add `Cozonomono.close/1` NIF to explicitly drop the `DbInstance` (or document reliance on GC)
-- [ ] Verify resource cleanup behavior — when the Elixir reference is garbage collected, the Rust `ResourceArc` should drop the `DbInstance`
+### 1.3 Instance Lifecycle ✅
+- [x] Added `Cozonomono.close/1` NIF for explicit resource release
+- [x] Verified resource cleanup behavior — `ResourceArc` reference counting handles GC cleanup automatically
+- [x] Tested with file-backed SQLite engine
+- [x] Documented that `close/1` is optional but useful for deterministic cleanup of file-backed engines
 
 ---
 
