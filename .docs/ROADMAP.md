@@ -74,28 +74,34 @@ These are all just CozoScript queries run via `run_script`, but we provide conve
 
 ## Phase 3: Advanced Features
 
-### 3.1 Change Callbacks
-- [ ] `register_callback/3` — wraps `DbInstance::register_callback`, returns `{id, pid}` where a GenServer or process receives `{:cozo_callback, op, new_rows, old_rows}` messages
-- [ ] `unregister_callback/2` — wraps `DbInstance::unregister_callback`
-- [ ] Rust side: spawn a thread that reads from the crossbeam `Receiver` and sends Erlang messages via `OwnedEnv` / `env.send()`
-- [ ] This is the most complex NIF integration — crossbeam channels must bridge to BEAM message passing
+### 3.1 Change Callbacks ✅
+- [x] `register_callback/3` — wraps `DbInstance::register_callback`, returns `{:ok, callback_id}` where the target process receives `{:cozo_callback, op, new_rows, old_rows}` messages
+- [x] `unregister_callback/2` — wraps `DbInstance::unregister_callback`, returns boolean
+- [x] Rust side: spawns a `std::thread` that reads from the crossbeam `Receiver` and sends Erlang messages via `OwnedEnv::send_and_clear`
+- [x] Supports `:pid` option to direct callbacks to any process, and `:capacity` option for bounded channels (backpressure)
+- [x] 9 tests covering put/rm callbacks, multiple callbacks, unregistration, custom pid, bounded capacity
 
-### 3.2 Custom Fixed Rules
-- [ ] `register_fixed_rule/3` — register a custom algorithm callable via `<~` in CozoScript
-- [ ] Consider using `SimpleFixedRule` for the common case (closure-based)
-- [ ] Rust side: the callback must call back into Elixir or accept a Rust closure — evaluate feasibility
-- [ ] Alternative: accept the rule implementation as a Rust module compiled into the NIF crate (less dynamic but simpler)
+### 3.2 Custom Fixed Rules ✅
+- [x] `register_fixed_rule/4` — register a custom algorithm callable via `<~` in CozoScript, using `SimpleFixedRule::rule_with_channel` for the channel-based bridge pattern
+- [x] `respond_fixed_rule/3` — send computed results back from Elixir to the blocked CozoDB rule invocation
+- [x] `unregister_fixed_rule/2` — remove a registered custom fixed rule
+- [x] Rust side: bridge resource (`ExFixedRuleBridge`) with pending request map, forwarding thread, and per-invocation crossbeam channel responses
+- [x] Supports concurrent rule invocations via request ID mapping
+- [x] 5 tests covering basic invocation, input relations, options, multiple invocations, and unregistration
 
-### 3.3 Index Management Helpers
+### 3.3 Index Management Helpers ✅
 Convenience functions wrapping CozoScript system ops:
-- [ ] `create_index/3` — `::index create <relation>:<index_name> {<columns>}`
-- [ ] `create_hnsw_index/3` — `::hnsw create ...`
-- [ ] `create_fts_index/3` — `::fts create ...`
-- [ ] `create_lsh_index/3` — `::lsh create ...`
-- [ ] `drop_index/3` — `::index drop <relation>:<index_name>`
+- [x] `create_index/4` — `::index create <relation>:<index_name> {<columns>}`
+- [x] `create_hnsw_index/4` — `::hnsw create ...` (vector search)
+- [x] `create_fts_index/4` — `::fts create ...` (full-text search)
+- [x] `create_lsh_index/4` — `::lsh create ...` (MinHash LSH)
+- [x] `drop_index/3` — `::index drop <relation>:<index_name>` (works for all index types)
+- [x] 8 tests covering standard, FTS, HNSW, and LSH indices with create/list/drop
 
-### 3.4 Access Level Management
-- [ ] `set_access_level/3` — `::set_access <relation> <level>` where level is `:normal | :protected | :read_only | :hidden`
+### 3.4 Access Level Management ✅
+- [x] `set_access_level/3` — `::access_level <level> <relations>` where level is `:normal | :protected | :read_only | :hidden`
+- [x] Accepts a single relation name or a list of names
+- [x] 5 tests covering read_only, protected, hidden, restore to normal, and multi-relation
 
 ---
 

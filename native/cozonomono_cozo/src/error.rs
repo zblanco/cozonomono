@@ -5,6 +5,8 @@ use thiserror::Error;
 pub enum ExError {
     #[error("Cozo Error: {0}")]
     Cozo(cozo::Error),
+    #[error("Fixed Rule Error: {0}")]
+    FixedRule(String),
 }
 
 // cozo::Error does not implement std::error::Error

@@ -322,6 +322,8 @@ name = "cozonomono_cozo"
 version = "0.1.0"
 dependencies = [
  "cozo",
+ "crossbeam",
+ "miette",
  "rustler",
  "serde_json",
  "thiserror",

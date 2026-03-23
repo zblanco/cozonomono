@@ -1,9 +1,13 @@
 use cozo::{DataValue, DbInstance, MultiTransaction, NamedRows};
 use rustler::types::map::MapIterator;
+use rustler::types::LocalPid;
 use rustler::{Decoder, Encoder, Env, NifResult, NifStruct, ResourceArc, Term};
+use std::collections::HashMap;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::Mutex;
 
-mod atoms {
+pub(crate) mod atoms {
     rustler::atoms! {
         nil,
         ok,
@@ -15,6 +19,10 @@ mod atoms {
         headers,
         rows,
         next,
+        cozo_callback,
+        cozo_fixed_rule,
+        put,
+        rm,
     }
 }
 
@@ -365,5 +373,59 @@ fn decode_term_to_json(term: Term<'_>) -> NifResult<serde_json::Value> {
                 Err(rustler::Error::Atom("unsupported_json_type"))
             }
         }
+    }
+}
+
+// --- Fixed Rule Bridge ---
+
+pub struct ExFixedRuleBridgeRef {
+    pub pid: LocalPid,
+    pub name: String,
+    pub next_request_id: AtomicU64,
+    pub pending: Mutex<HashMap<u64, crossbeam::channel::Sender<miette::Result<NamedRows>>>>,
+    pub closed: AtomicBool,
+}
+
+impl ExFixedRuleBridgeRef {
+    pub fn new(pid: LocalPid, name: String) -> Self {
+        Self {
+            pid,
+            name,
+            next_request_id: AtomicU64::new(0),
+            pending: Mutex::new(HashMap::new()),
+            closed: AtomicBool::new(false),
+        }
+    }
+
+    pub fn fail_all_pending(&self, msg: &str) {
+        let pending = std::mem::take(&mut *self.pending.lock().unwrap());
+        for (_, sender) in pending {
+            let _ = sender.send(Err(miette::miette!("{}", msg)));
+        }
+    }
+}
+
+#[derive(NifStruct)]
+#[module = "Cozonomono.FixedRuleBridge"]
+pub struct ExFixedRuleBridge {
+    pub resource: ResourceArc<ExFixedRuleBridgeRef>,
+    pub name: String,
+}
+
+impl ExFixedRuleBridge {
+    pub fn new(bridge_ref: ExFixedRuleBridgeRef) -> Self {
+        let name = bridge_ref.name.clone();
+        Self {
+            resource: ResourceArc::new(bridge_ref),
+            name,
+        }
+    }
+}
+
+impl Deref for ExFixedRuleBridge {
+    type Target = ExFixedRuleBridgeRef;
+
+    fn deref(&self) -> &Self::Target {
+        &self.resource
     }
 }

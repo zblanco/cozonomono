@@ -3,6 +3,7 @@ defmodule Cozonomono do
   Documentation for `Cozonomono`.
   """
 
+  alias Cozonomono.FixedRuleBridge
   alias Cozonomono.Instance
   alias Cozonomono.NamedRows
   alias Cozonomono.Native
@@ -246,6 +247,231 @@ defmodule Cozonomono do
   """
   @spec compact(Instance.t()) :: {:ok, NamedRows.t()} | {:error, term()}
   def compact(instance), do: query(instance, "::compact")
+
+  @doc """
+  Sets the access level for one or more stored relations.
+
+  Access levels control what operations are allowed on the relation:
+
+    * `:normal` — full read/write access (default)
+    * `:protected` — cannot be removed with `::remove`
+    * `:read_only` — no writes allowed
+    * `:hidden` — not visible in `::relations`, no writes allowed
+
+  Accepts a single relation name or a list.
+
+  ## Examples
+
+      Cozonomono.set_access_level(instance, "users", :read_only)
+      Cozonomono.set_access_level(instance, ["users", "logs"], :protected)
+  """
+  @spec set_access_level(Instance.t(), String.t() | [String.t()], atom()) ::
+          {:ok, NamedRows.t()} | {:error, term()}
+  def set_access_level(instance, relations, level)
+      when level in [:normal, :protected, :read_only, :hidden] do
+    level_str = Atom.to_string(level)
+
+    rel_str =
+      case relations do
+        list when is_list(list) -> Enum.join(list, ", ")
+        name when is_binary(name) -> name
+      end
+
+    query(instance, "::access_level #{level_str} #{rel_str}")
+  end
+
+  # --- Change Callbacks ---
+
+  @doc """
+  Registers a callback that fires when the given relation is modified.
+
+  The calling process (or the process specified by `pid`) will receive messages
+  of the form `{:cozo_callback, op, new_rows, old_rows}` where:
+
+    * `op` is `:put` or `:rm`
+    * `new_rows` is a `%NamedRows{}` with the new data
+    * `old_rows` is a `%NamedRows{}` with the old data
+
+  Returns `{:ok, callback_id}` where the ID can be used with `unregister_callback/2`.
+
+  ## Options
+
+    * `capacity` - optional channel capacity (default: unbounded). Set to limit
+      backpressure if the subscriber is slower than the writer.
+
+  ## Examples
+
+      {:ok, cb_id} = Cozonomono.register_callback(instance, "users")
+      Cozonomono.query(instance, "?[id, name] <- [[1, 'Alice']] :put users {id => name}")
+      receive do
+        {:cozo_callback, :put, new_rows, old_rows} -> handle_change(new_rows, old_rows)
+      end
+      Cozonomono.unregister_callback(instance, cb_id)
+  """
+  @spec register_callback(Instance.t(), String.t(), keyword()) ::
+          {:ok, non_neg_integer()}
+  def register_callback(instance, relation, opts \\ []) do
+    pid = Keyword.get(opts, :pid, self())
+    capacity = Keyword.get(opts, :capacity)
+    {:ok, Native.register_callback(instance, relation, pid, capacity)}
+  end
+
+  @doc """
+  Unregisters a previously registered callback.
+
+  Returns `true` if the callback was found and removed, `false` if it was
+  already unregistered or did not exist.
+  """
+  @spec unregister_callback(Instance.t(), non_neg_integer()) :: boolean()
+  def unregister_callback(instance, id) do
+    Native.unregister_callback(instance, id)
+  end
+
+  # --- Custom Fixed Rules ---
+
+  @doc """
+  Registers a custom fixed rule that can be invoked in CozoScript via `<~`.
+
+  The handler process receives messages of the form:
+
+      {:cozo_fixed_rule, request_id, inputs, options}
+
+  where:
+    * `request_id` is an integer identifying this invocation
+    * `inputs` is a list of `%NamedRows{}` (the input relations)
+    * `options` is a map of option name strings to values
+
+  The handler **must** respond by calling `respond_fixed_rule/3` with the
+  result `%NamedRows{}`, otherwise the query will hang.
+
+  ## Options
+
+    * `pid` - the process to receive rule invocations (default: `self()`)
+
+  ## Examples
+
+      {:ok, bridge} = Cozonomono.register_fixed_rule(instance, "MyRule", 2)
+
+      # In the handler process:
+      receive do
+        {:cozo_fixed_rule, request_id, inputs, options} ->
+          result = %NamedRows{headers: ["a", "b"], rows: [[1, 2]]}
+          Cozonomono.respond_fixed_rule(bridge, request_id, result)
+      end
+
+      # Use in CozoScript:
+      Cozonomono.query(instance, "?[a, b] <~ MyRule()")
+  """
+  @spec register_fixed_rule(Instance.t(), String.t(), pos_integer(), keyword()) ::
+          {:ok, FixedRuleBridge.t()} | {:error, term()}
+  def register_fixed_rule(instance, name, return_arity, opts \\ []) do
+    pid = Keyword.get(opts, :pid, self())
+    Native.register_fixed_rule(instance, name, return_arity, pid)
+  end
+
+  @doc """
+  Responds to a fixed rule invocation with the computed result.
+
+  Must be called by the handler process after receiving a
+  `{:cozo_fixed_rule, request_id, inputs, options}` message.
+  """
+  @spec respond_fixed_rule(FixedRuleBridge.t(), non_neg_integer(), NamedRows.t()) ::
+          :ok | {:error, term()}
+  def respond_fixed_rule(bridge, request_id, %NamedRows{} = result) do
+    case Native.respond_fixed_rule(bridge, request_id, result) do
+      {:ok, :ok} -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  @doc """
+  Unregisters a previously registered custom fixed rule.
+
+  Returns `true` if the rule was found and removed, `false` otherwise.
+  """
+  @spec unregister_fixed_rule(Instance.t(), String.t()) :: {:ok, boolean()} | {:error, term()}
+  def unregister_fixed_rule(instance, name) do
+    Native.unregister_fixed_rule(instance, name)
+  end
+
+  # --- Index Management ---
+
+  @doc """
+  Creates a standard index on a stored relation.
+
+  ## Examples
+
+      :ok = Cozonomono.create_index(instance, "users", "users_by_name", ["name"])
+  """
+  @spec create_index(Instance.t(), String.t(), String.t(), [String.t()]) ::
+          {:ok, NamedRows.t()} | {:error, term()}
+  def create_index(instance, relation, index_name, columns) when is_list(columns) do
+    cols = Enum.join(columns, ", ")
+    query(instance, "::index create #{relation}:#{index_name} {#{cols}}")
+  end
+
+  @doc """
+  Creates an HNSW (vector) index on a stored relation.
+
+  The `opts_string` is the raw CozoScript options body (without outer braces).
+
+  ## Examples
+
+      Cozonomono.create_hnsw_index(instance, "docs", "docs_vec",
+        "dim: 128, dtype: F32, fields: [embedding], distance: Cosine")
+  """
+  @spec create_hnsw_index(Instance.t(), String.t(), String.t(), String.t()) ::
+          {:ok, NamedRows.t()} | {:error, term()}
+  def create_hnsw_index(instance, relation, index_name, opts_string) do
+    query(instance, "::hnsw create #{relation}:#{index_name} {#{opts_string}}")
+  end
+
+  @doc """
+  Creates a full-text search index on a stored relation.
+
+  The `opts_string` is the raw CozoScript options body (without outer braces).
+
+  ## Examples
+
+      Cozonomono.create_fts_index(instance, "docs", "docs_fts",
+        "extractor: content, tokenizer: Simple")
+  """
+  @spec create_fts_index(Instance.t(), String.t(), String.t(), String.t()) ::
+          {:ok, NamedRows.t()} | {:error, term()}
+  def create_fts_index(instance, relation, index_name, opts_string) do
+    query(instance, "::fts create #{relation}:#{index_name} {#{opts_string}}")
+  end
+
+  @doc """
+  Creates a MinHash LSH index on a stored relation.
+
+  The `opts_string` is the raw CozoScript options body (without outer braces).
+
+  ## Examples
+
+      Cozonomono.create_lsh_index(instance, "docs", "docs_lsh",
+        "extractor: content, tokenizer: Simple, n_gram: 3, n_perm: 200")
+  """
+  @spec create_lsh_index(Instance.t(), String.t(), String.t(), String.t()) ::
+          {:ok, NamedRows.t()} | {:error, term()}
+  def create_lsh_index(instance, relation, index_name, opts_string) do
+    query(instance, "::lsh create #{relation}:#{index_name} {#{opts_string}}")
+  end
+
+  @doc """
+  Drops an index from a stored relation.
+
+  Works for standard, HNSW, FTS, and LSH indices.
+
+  ## Examples
+
+      Cozonomono.drop_index(instance, "users", "users_by_name")
+  """
+  @spec drop_index(Instance.t(), String.t(), String.t()) ::
+          {:ok, NamedRows.t()} | {:error, term()}
+  def drop_index(instance, relation, index_name) do
+    query(instance, "::index drop #{relation}:#{index_name}")
+  end
 
   @default_query_opts [params: nil, immutable?: false]
 

@@ -28,6 +28,11 @@ defmodule Cozonomono.Native do
   def tx_run_script(_tx, _payload, _params), do: err()
   def tx_commit(_tx), do: err()
   def tx_abort(_tx), do: err()
+  def register_callback(_instance, _relation, _pid, _capacity), do: err()
+  def unregister_callback(_instance, _id), do: err()
+  def register_fixed_rule(_instance, _name, _return_arity, _pid), do: err()
+  def respond_fixed_rule(_bridge, _request_id, _result), do: err()
+  def unregister_fixed_rule(_instance, _name), do: err()
   def close_instance(_instance), do: err()
   defp err, do: :erlang.nif_error(:nif_not_loaded)
 end
