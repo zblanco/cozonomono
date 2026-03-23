@@ -12,13 +12,7 @@ defmodule Cozonomono.MixProject do
       elixir: "~> 1.15",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
-      aliases: [
-        "rust.lint": [
-          "cmd cargo clippy --manifest-path=native/cozonomono_cozo/Cargo.toml -- -Dwarnings"
-        ],
-        "rust.fmt": ["cmd cargo fmt --manifest-path=native/cozonomono_cozo/Cargo.toml --all"],
-        ci: ["format", "rust.fmt", "rust.lint", "test"]
-      ]
+      aliases: aliases()
     ]
   end
 
@@ -33,7 +27,21 @@ defmodule Cozonomono.MixProject do
   defp deps do
     [
       {:rustler_precompiled, "~> 0.7"},
+      {:tidewave, "~> 0.5", only: :dev},
+      {:bandit, "~> 1.0", only: :dev},
       {:rustler, "~> 0.30.0", optional: not (@dev? or @force_build?)}
+    ]
+  end
+
+  defp aliases do
+    [
+      "rust.lint": [
+        "cmd cargo clippy --manifest-path=native/cozonomono_cozo/Cargo.toml -- -Dwarnings"
+      ],
+      "rust.fmt": ["cmd cargo fmt --manifest-path=native/cozonomono_cozo/Cargo.toml --all"],
+      ci: ["format", "rust.fmt", "rust.lint", "test"],
+      tidewave:
+        "run --no-halt -e 'Agent.start(fn -> Bandit.start_link(plug: Tidewave, port: 4000) end)'"
     ]
   end
 end

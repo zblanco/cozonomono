@@ -1,4 +1,4 @@
-use cozo::{DataValue, DbInstance, NamedRows};
+use cozo::{DataValue, DbInstance, MultiTransaction, NamedRows};
 use rustler::types::map::MapIterator;
 use rustler::{Decoder, Encoder, Env, NifResult, NifStruct, ResourceArc, Term};
 use std::ops::Deref;
@@ -52,6 +52,32 @@ impl Deref for ExDbInstance {
     }
 }
 
+pub struct ExMultiTransactionRef(pub MultiTransaction);
+
+#[derive(NifStruct)]
+#[module = "Cozonomono.Transaction"]
+pub struct ExMultiTransaction {
+    pub resource: ResourceArc<ExMultiTransactionRef>,
+    pub write: bool,
+}
+
+impl ExMultiTransaction {
+    pub fn new(tx: MultiTransaction, write: bool) -> Self {
+        Self {
+            resource: ResourceArc::new(ExMultiTransactionRef(tx)),
+            write,
+        }
+    }
+}
+
+impl Deref for ExMultiTransaction {
+    type Target = MultiTransaction;
+
+    fn deref(&self) -> &Self::Target {
+        &self.resource.0
+    }
+}
+
 pub struct ExNamedRows(pub NamedRows);
 
 impl Deref for ExNamedRows {
@@ -86,7 +112,10 @@ impl Encoder for ExNamedRows {
         };
 
         let map = rustler::Term::map_new(env)
-            .map_put(atoms::__struct__().encode(env), atoms::named_rows_struct().encode(env))
+            .map_put(
+                atoms::__struct__().encode(env),
+                atoms::named_rows_struct().encode(env),
+            )
             .expect("Failed to encode __struct__")
             .map_put(atoms::headers().encode(env), headers)
             .expect("Failed to encode headers")
@@ -136,9 +165,7 @@ impl Encoder for ExDataValue {
                 cozo::Vector::F32(f32_array) => f32_array.clone().into_raw_vec().encode(env),
                 cozo::Vector::F64(f64_array) => f64_array.clone().into_raw_vec().encode(env),
             },
-            DataValue::Json(cozo::JsonData(json)) => {
-                encode_json_value(json, env)
-            }
+            DataValue::Json(cozo::JsonData(json)) => encode_json_value(json, env),
             DataValue::Validity(validity) => {
                 let timestamp = validity.timestamp.0 .0;
                 let is_assert = validity.is_assert.0;
@@ -178,6 +205,48 @@ fn encode_json_value<'a>(value: &serde_json::Value, env: Env<'a>) -> Term<'a> {
             }
             term_map
         }
+    }
+}
+
+impl<'a> Decoder<'a> for ExNamedRows {
+    fn decode(term: Term<'a>) -> NifResult<Self> {
+        // Decode a %Cozonomono.NamedRows{} struct (which is a map with __struct__ key).
+        // We need: headers (list of strings), rows (list of lists of DataValues), next (nil or NamedRows).
+        let headers_term = term
+            .map_get(atoms::headers().encode(term.get_env()))
+            .map_err(|_| rustler::Error::Atom("missing_headers"))?;
+        let headers: Vec<String> = headers_term.decode()?;
+
+        let rows_term = term
+            .map_get(atoms::rows().encode(term.get_env()))
+            .map_err(|_| rustler::Error::Atom("missing_rows"))?;
+        let row_terms: Vec<Term> = rows_term.decode()?;
+        let rows: Vec<Vec<DataValue>> = row_terms
+            .into_iter()
+            .map(|row_term| {
+                let cells: Vec<Term> = row_term.decode()?;
+                cells
+                    .into_iter()
+                    .map(|cell| ExDataValue::decode(cell).map(|ev| ev.0))
+                    .collect::<NifResult<Vec<DataValue>>>()
+            })
+            .collect::<NifResult<Vec<Vec<DataValue>>>>()?;
+
+        let next_term = term
+            .map_get(atoms::next().encode(term.get_env()))
+            .map_err(|_| rustler::Error::Atom("missing_next"))?;
+        let next = if next_term.is_atom() {
+            // nil atom means no next
+            None
+        } else {
+            Some(Box::new(ExNamedRows::decode(next_term)?.0))
+        };
+
+        Ok(ExNamedRows(NamedRows {
+            headers,
+            rows,
+            next,
+        }))
     }
 }
 

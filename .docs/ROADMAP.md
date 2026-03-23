@@ -36,39 +36,39 @@ The library currently exposes a minimal working surface:
 
 ## Phase 2: Complete CozoDB API Surface
 
-### 2.1 Import / Export
-- [ ] `export_relations/2` — `fn export_relations(instance, relation_names) -> {:ok, %{String.t() => NamedRows.t()}}`
-- [ ] `import_relations/2` — `fn import_relations(instance, data) -> :ok | {:error, term()}`
-- [ ] Decide on data format: use NamedRows structs or raw maps for the import payload
-- [ ] NIF: `export_relations` wrapping `DbInstance::export_relations`
-- [ ] NIF: `import_relations` wrapping `DbInstance::import_relations`
+### 2.1 Import / Export ✅
+- [x] `export_relations/2` — `fn export_relations(instance, relation_names) -> {:ok, %{String.t() => NamedRows.t()}}`
+- [x] `import_relations/2` — `fn import_relations(instance, data) -> :ok | {:error, term()}`
+- [x] Decide on data format: use NamedRows structs or raw maps for the import payload — **chose NamedRows structs** for type safety and consistency with query results
+- [x] NIF: `export_relations` wrapping `DbInstance::export_relations`
+- [x] NIF: `import_relations` wrapping `DbInstance::import_relations`
 
-### 2.2 Backup / Restore
-- [ ] `backup/2` — `fn backup(instance, path) -> :ok | {:error, term()}`
-- [ ] `restore/2` — `fn restore(instance, path) -> :ok | {:error, term()}`
-- [ ] `import_from_backup/3` — selective relation import from a SQLite backup file
-- [ ] All three wrap the corresponding `DbInstance` methods
+### 2.2 Backup / Restore ✅
+- [x] `backup/2` — `fn backup(instance, path) -> :ok | {:error, term()}`
+- [x] `restore/2` — `fn restore(instance, path) -> :ok | {:error, term()}`
+- [x] `import_from_backup/3` — selective relation import from a SQLite backup file
+- [x] All three wrap the corresponding `DbInstance` methods
 
-### 2.3 Multi-Statement Transactions
-- [ ] `multi_transaction/2` — create a transaction handle (write or read-only)
-- [ ] `tx_run/3` — run a script within the transaction
-- [ ] `tx_commit/1` — commit the transaction
-- [ ] `tx_abort/1` — abort the transaction
-- [ ] Rust side: wrap `DbInstance::multi_transaction` which returns a `MultiTransaction` — this needs its own resource type (`ExMultiTransactionRef` / `ExMultiTransaction`)
-- [ ] Consider ownership model: the `MultiTransaction` holds a mutable borrow, so concurrent access must be prevented or serialized
+### 2.3 Multi-Statement Transactions ✅
+- [x] `multi_transaction/2` — create a transaction handle (write or read-only)
+- [x] `tx_query/3` — run a script within the transaction (named `tx_query` for consistency with `query/3`)
+- [x] `tx_commit/1` — commit the transaction
+- [x] `tx_abort/1` — abort the transaction
+- [x] Rust side: wrap `DbInstance::multi_transaction` which returns a `MultiTransaction` — uses `ExMultiTransactionRef` / `ExMultiTransaction` resource types following the two-type pattern
+- [x] Ownership model: `MultiTransaction` uses crossbeam bounded channels internally — CozoDB spawns a dedicated thread that holds the actual transaction lock, and the NIF communicates via send/recv, so the BEAM scheduler is not blocked and concurrent access is serialized by the channel
 
-### 2.4 System Operations (Schema Introspection)
-These are all just CozoScript queries run via `run_script`, but we should provide convenience functions:
-- [ ] `list_relations/1` — `::relations`
-- [ ] `list_columns/2` — `::columns <relation>`
-- [ ] `list_indices/2` — `::indices <relation>`
-- [ ] `remove_relation/2` — `::remove <relation>`
-- [ ] `rename_relation/3` — `::rename <relation> <new_name>`
-- [ ] `describe_relation/3` — `::describe <relation> '<description>'`
-- [ ] `explain/2` — `::explain { <query> }`
-- [ ] `list_running/1` — `::running`
-- [ ] `kill_running/2` — `::kill <id>`
-- [ ] `compact/1` — `::compact`
+### 2.4 System Operations (Schema Introspection) ✅
+These are all just CozoScript queries run via `run_script`, but we provide convenience functions:
+- [x] `list_relations/1` — `::relations`
+- [x] `list_columns/2` — `::columns <relation>`
+- [x] `list_indices/2` — `::indices <relation>`
+- [x] `remove_relation/2` — `::remove <relation>` (also accepts a list)
+- [x] `rename_relation/3` — `::rename <old> -> <new>`
+- [ ] `describe_relation/3` — `::describe <relation> '<description>'` — **skipped: grammar bug in cozo 0.7.6** (`describe_relation_op` defined in pest grammar but not included in `sys_script` alternation, so it parses as invalid input)
+- [x] `explain/2` — `::explain { <query> }`
+- [x] `list_running/1` — `::running`
+- [x] `kill_running/2` — `::kill <id>`
+- [x] `compact/1` — `::compact`
 
 ---
 
