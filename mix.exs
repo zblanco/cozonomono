@@ -29,7 +29,8 @@ defmodule Cozonomono.MixProject do
       {:rustler_precompiled, "~> 0.7"},
       {:tidewave, "~> 0.5", only: :dev},
       {:bandit, "~> 1.0", only: :dev},
-      {:rustler, "~> 0.30.0", optional: not (@dev? or @force_build?)}
+      {:rustler, "~> 0.30.0", optional: not (@dev? or @force_build?)},
+      {:benchee, "~> 1.3", only: :dev}
     ]
   end
 

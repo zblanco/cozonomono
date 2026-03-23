@@ -15,6 +15,7 @@ pub(crate) mod atoms {
         validity,
         json,
         named_rows_struct = "Elixir.Cozonomono.NamedRows",
+        lazy_rows_struct = "Elixir.Cozonomono.LazyRows",
         __struct__,
         headers,
         rows,
@@ -23,6 +24,12 @@ pub(crate) mod atoms {
         cozo_fixed_rule,
         put,
         rm,
+        resource,
+        statement_index,
+        row_count,
+        column_count,
+        has_next,
+        out_of_bounds,
     }
 }
 
@@ -96,43 +103,45 @@ impl Deref for ExNamedRows {
     }
 }
 
+/// Encode a `NamedRows` reference as a `%Cozonomono.NamedRows{}` BEAM term without cloning.
+pub(crate) fn encode_named_rows<'a>(named_rows: &NamedRows, env: Env<'a>) -> Term<'a> {
+    let headers = named_rows.headers.encode(env);
+
+    let rows: Vec<Term<'a>> = named_rows
+        .rows
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|dv| encode_data_value(dv, env))
+                .collect::<Vec<Term<'a>>>()
+                .encode(env)
+        })
+        .collect();
+
+    let rows_term = rows.encode(env);
+
+    let next = match &named_rows.next {
+        Some(boxed_next) => encode_named_rows(boxed_next, env),
+        None => atoms::nil().encode(env),
+    };
+
+    rustler::Term::map_new(env)
+        .map_put(
+            atoms::__struct__().encode(env),
+            atoms::named_rows_struct().encode(env),
+        )
+        .expect("Failed to encode __struct__")
+        .map_put(atoms::headers().encode(env), headers)
+        .expect("Failed to encode headers")
+        .map_put(atoms::rows().encode(env), rows_term)
+        .expect("Failed to encode rows")
+        .map_put(atoms::next().encode(env), next)
+        .expect("Failed to encode next")
+}
+
 impl Encoder for ExNamedRows {
     fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
-        let headers = self.headers.encode(env);
-
-        let rows: Vec<Term<'a>> = self
-            .0
-            .rows
-            .iter()
-            .map(|row| {
-                row.iter()
-                    .map(|data_value| ExDataValue(data_value.clone()).encode(env))
-                    .collect::<Vec<Term<'a>>>()
-                    .encode(env)
-            })
-            .collect();
-
-        let rows_term = rows.encode(env);
-
-        let next = match &self.0.next {
-            Some(boxed_next) => ExNamedRows((**boxed_next).clone()).encode(env),
-            None => atoms::nil().encode(env),
-        };
-
-        let map = rustler::Term::map_new(env)
-            .map_put(
-                atoms::__struct__().encode(env),
-                atoms::named_rows_struct().encode(env),
-            )
-            .expect("Failed to encode __struct__")
-            .map_put(atoms::headers().encode(env), headers)
-            .expect("Failed to encode headers")
-            .map_put(atoms::rows().encode(env), rows_term)
-            .expect("Failed to encode rows")
-            .map_put(atoms::next().encode(env), next)
-            .expect("Failed to encode next");
-
-        map
+        encode_named_rows(&self.0, env)
     }
 }
 
@@ -146,41 +155,54 @@ impl Deref for ExDataValue {
     }
 }
 
+/// Encode a `DataValue` reference as a BEAM term without cloning.
+pub(crate) fn encode_data_value<'a>(value: &DataValue, env: Env<'a>) -> Term<'a> {
+    match value {
+        DataValue::Null => atoms::nil().encode(env),
+        DataValue::Bool(b) => b.encode(env),
+        DataValue::Num(number) => match number {
+            cozo::Num::Int(i) => i.encode(env),
+            cozo::Num::Float(f) => f.encode(env),
+        },
+        DataValue::Str(s) => s.as_str().encode(env),
+        DataValue::Bytes(bytes) => bytes.as_slice().encode(env),
+        DataValue::Uuid(cozo::UuidWrapper(uuid)) => uuid.to_string().encode(env),
+        DataValue::Regex(cozo::RegexWrapper(regex)) => regex.to_string().encode(env),
+        DataValue::List(list) => list
+            .iter()
+            .map(|dv| encode_data_value(dv, env))
+            .collect::<Vec<Term<'a>>>()
+            .encode(env),
+        DataValue::Set(set) => set
+            .iter()
+            .map(|dv| encode_data_value(dv, env))
+            .collect::<Vec<Term<'a>>>()
+            .encode(env),
+        DataValue::Vec(vec) => match vec {
+            cozo::Vector::F32(arr) => arr
+                .iter()
+                .map(|f| f.encode(env))
+                .collect::<Vec<Term<'a>>>()
+                .encode(env),
+            cozo::Vector::F64(arr) => arr
+                .iter()
+                .map(|f| f.encode(env))
+                .collect::<Vec<Term<'a>>>()
+                .encode(env),
+        },
+        DataValue::Json(cozo::JsonData(json)) => encode_json_value(json, env),
+        DataValue::Validity(validity) => {
+            let timestamp = validity.timestamp.0 .0;
+            let is_assert = validity.is_assert.0;
+            (atoms::validity(), timestamp, is_assert).encode(env)
+        }
+        DataValue::Bot => atoms::nil().encode(env),
+    }
+}
+
 impl Encoder for ExDataValue {
     fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
-        match &self.0 {
-            DataValue::Null => atoms::nil().encode(env),
-            DataValue::Bool(value) => value.encode(env),
-            DataValue::Num(number) => match number {
-                cozo::Num::Int(i) => i.encode(env),
-                cozo::Num::Float(f) => f.encode(env),
-            },
-            DataValue::Str(str) => str.as_str().encode(env),
-            DataValue::Bytes(bytes) => bytes.as_slice().encode(env),
-            DataValue::Uuid(cozo::UuidWrapper(uuid)) => uuid.to_string().encode(env),
-            DataValue::Regex(cozo::RegexWrapper(regex)) => regex.to_string().encode(env),
-            DataValue::List(list) => list
-                .iter()
-                .map(|data_value| ExDataValue(data_value.clone()))
-                .collect::<Vec<ExDataValue>>()
-                .encode(env),
-            DataValue::Set(set) => set
-                .iter()
-                .map(|data_value| ExDataValue(data_value.clone()))
-                .collect::<Vec<ExDataValue>>()
-                .encode(env),
-            DataValue::Vec(vec) => match vec {
-                cozo::Vector::F32(f32_array) => f32_array.clone().into_raw_vec().encode(env),
-                cozo::Vector::F64(f64_array) => f64_array.clone().into_raw_vec().encode(env),
-            },
-            DataValue::Json(cozo::JsonData(json)) => encode_json_value(json, env),
-            DataValue::Validity(validity) => {
-                let timestamp = validity.timestamp.0 .0;
-                let is_assert = validity.is_assert.0;
-                (atoms::validity(), timestamp, is_assert).encode(env)
-            }
-            DataValue::Bot => atoms::nil().encode(env),
-        }
+        encode_data_value(&self.0, env)
     }
 }
 
@@ -372,6 +394,56 @@ fn decode_term_to_json(term: Term<'_>) -> NifResult<serde_json::Value> {
             } else {
                 Err(rustler::Error::Atom("unsupported_json_type"))
             }
+        }
+    }
+}
+
+// --- Lazy Rows (zero-copy query results) ---
+
+/// Owns a chain of `NamedRows` results on the Rust heap, flattened from the
+/// linked-list `next` structure into a `Vec` for O(1) indexed access.
+pub struct ExLazyRowsRef(pub Vec<NamedRows>);
+
+/// Flatten a `NamedRows` linked list into a `Vec<NamedRows>` by taking ownership
+/// of each `next` pointer without cloning.
+pub fn flatten_named_rows(mut current: NamedRows) -> Vec<NamedRows> {
+    let mut out = Vec::new();
+    loop {
+        let next = current.next.take().map(|boxed| *boxed);
+        out.push(current);
+        match next {
+            Some(n) => current = n,
+            None => break,
+        }
+    }
+    out
+}
+
+/// NifStruct mapping to `%Cozonomono.LazyRows{}` on the Elixir side.
+/// Holds an opaque reference to the Rust-heap result chain plus metadata
+/// fields that are readable without a NIF call.
+#[derive(NifStruct)]
+#[module = "Cozonomono.LazyRows"]
+pub struct ExLazyRows {
+    pub resource: ResourceArc<ExLazyRowsRef>,
+    pub statement_index: usize,
+    pub headers: Vec<String>,
+    pub row_count: usize,
+    pub column_count: usize,
+    pub has_next: bool,
+}
+
+impl ExLazyRows {
+    /// Build from a chain reference and a statement index.
+    pub fn from_chain(chain: ResourceArc<ExLazyRowsRef>, idx: usize) -> Self {
+        let nr = &chain.0[idx];
+        Self {
+            headers: nr.headers.clone(),
+            row_count: nr.rows.len(),
+            column_count: nr.headers.len(),
+            has_next: idx + 1 < chain.0.len(),
+            resource: chain,
+            statement_index: idx,
         }
     }
 }

@@ -107,11 +107,24 @@ Convenience functions wrapping CozoScript system ops:
 
 ## Phase 4: Ergonomics & Performance
 
-### 4.1 Zero-Copy Opportunities
-Following Explorer's patterns:
-- [ ] Evaluate whether `DataValue::Vec` (F32/F64 arrays) can be returned as zero-copy BEAM binaries pointing into the Rust resource via `resource.make_binary_unsafe`
-- [ ] For bulk data export, consider returning column-oriented data instead of row-oriented to enable zero-copy binary slices for numeric columns
-- [ ] Profile the `ExDataValue` encoding hot path — if row counts are large, manual encoding with pre-computed atom keys (like Explorer does) will outperform the current approach
+### 4.1 Zero-Copy Opportunities ✅
+- [x] Refactored `ExDataValue` and `ExNamedRows` Encoder impls to use borrow-based helper functions (`encode_data_value`, `encode_named_rows`) — eliminates unnecessary cloning of `DataValue`, `NamedRows`, and `Vec` arrays during encoding
+- [x] Added `ExLazyRowsRef` resource type wrapping `Vec<NamedRows>` (flattened chain) on the Rust heap
+- [x] Added `ExLazyRows` NifStruct mapping to `%Cozonomono.LazyRows{}` with metadata fields (headers, row_count, column_count, has_next)
+- [x] Added lazy query NIFs: `run_default_lazy`, `run_script_lazy`, `tx_run_script_lazy`
+- [x] Added accessor NIFs: `lazy_rows_row_at`, `lazy_rows_cell_at`, `lazy_rows_column_at`, `lazy_rows_slice`, `lazy_rows_to_named_rows`, `lazy_rows_next`
+- [x] Added `Cozonomono.LazyRows` Elixir module with `row_at/2`, `cell_at/3`, `column_at/2`, `column/2`, `slice/3`, `to_named_rows/1`, `next/1`
+- [x] Added `Cozonomono.query_lazy/3` and `Cozonomono.tx_query_lazy/3`
+- [x] Backward-compatible: existing `query/3` API unchanged
+- [x] 22 new tests (112 total), benchmarks in `.bench/`
+- [x] Benchmarked: cell access 27,000x faster than full eager query, row access 18,000x faster, single column extraction 170x faster for 10k row result sets
+
+#### 4.1.1 Enumerable & Stream Support for LazyRows ✅
+- [x] `LazyRows.Iterator` — private struct implementing `Enumerable` with chunked `slice` callback (1000-row batches per NIF call) and smart `reduce` that amortizes NIF boundary crossing
+- [x] `LazyRows.to_enum/1` — explicit opt-in returning the iterator (following Explorer's pattern of not implementing `Enumerable` directly on the data type)
+- [x] `LazyRows.to_stream/2` — returns an Elixir `Stream` via `Stream.resource/3` with configurable `chunk_size` for bounded-memory processing of large result sets
+- [x] `Enumerable.count/1` returns row count in O(1) from metadata, `slice/1` does bulk NIF fetch, `member?/2` defers to reduce fallback to make O(n) cost visible
+- [x] 14 new tests (126 total) covering `Enum.count`, `Enum.take`, `Enum.at`, `Enum.map`, `Enum.reduce_while`, `Enum.to_list`, `Enum.zip`, `Stream.take`, `Stream.filter`, empty results
 
 ### 4.2 Query Builder (Optional)
 - [ ] Consider a CozoScript query builder DSL in Elixir for type-safe query construction

@@ -5,6 +5,7 @@ defmodule Cozonomono do
 
   alias Cozonomono.FixedRuleBridge
   alias Cozonomono.Instance
+  alias Cozonomono.LazyRows
   alias Cozonomono.NamedRows
   alias Cozonomono.Native
   alias Cozonomono.Transaction
@@ -493,5 +494,46 @@ defmodule Cozonomono do
     else
       Native.run_script(instance, query, opts[:params], opts[:immutable?])
     end
+  end
+
+  @doc """
+  Runs a query and returns a lazy, zero-copy reference to the results.
+
+  Unlike `query/3`, the results stay on the Rust heap and are only copied
+  to the BEAM when accessed via `Cozonomono.LazyRows` accessor functions.
+
+  This is ideal for large result sets where you only need a subset of data.
+
+  ## Examples
+
+      {:ok, lazy} = Cozonomono.query_lazy(instance, "?[id, name] := *users{id, name}")
+      lazy.row_count  #=> 10000
+      {:ok, first_row} = Cozonomono.LazyRows.row_at(lazy, 0)
+  """
+  @spec query_lazy(
+          instance :: Instance.t(),
+          query :: String.t(),
+          opts :: Keyword.t()
+        ) :: {:ok, LazyRows.t()} | {:error, term()}
+  def query_lazy(instance, query, opts \\ []) do
+    opts = Keyword.validate!(opts, @default_query_opts)
+
+    if Keyword.equal?(opts, @default_query_opts) do
+      Native.run_default_lazy(instance, query)
+    else
+      Native.run_script_lazy(instance, query, opts[:params], opts[:immutable?])
+    end
+  end
+
+  @doc """
+  Runs a query within a multi-statement transaction and returns a lazy result.
+
+  See `query_lazy/3` for details on lazy results.
+  """
+  @spec tx_query_lazy(Transaction.t(), String.t(), map() | nil) ::
+          {:ok, LazyRows.t()} | {:error, term()}
+  def tx_query_lazy(tx, query, params \\ nil) do
+    params = params || %{}
+    Native.tx_run_script_lazy(tx, query, params)
   end
 end

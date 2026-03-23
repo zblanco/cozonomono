@@ -2,19 +2,21 @@ mod datatypes;
 mod error;
 
 use datatypes::atoms;
+use datatypes::{encode_data_value, encode_named_rows, flatten_named_rows};
 pub use datatypes::{
     ExDataValue, ExDbInstance, ExDbInstanceRef, ExFixedRuleBridge, ExFixedRuleBridgeRef,
-    ExMultiTransaction, ExMultiTransactionRef, ExNamedRows,
+    ExLazyRows, ExLazyRowsRef, ExMultiTransaction, ExMultiTransactionRef, ExNamedRows,
 };
 pub use error::ExError;
 use rustler::types::LocalPid;
-use rustler::{Encoder, Env, Term};
+use rustler::{Encoder, Env, ResourceArc, Term};
 use std::collections::{BTreeMap, HashMap};
 
 fn on_load(env: Env, _info: Term) -> bool {
     rustler::resource!(ExDbInstanceRef, env);
     rustler::resource!(ExDbInstance, env);
     rustler::resource!(ExMultiTransactionRef, env);
+    rustler::resource!(ExLazyRowsRef, env);
     rustler::resource!(ExFixedRuleBridgeRef, env);
     true
 }
@@ -274,6 +276,133 @@ fn unregister_fixed_rule(instance: ExDbInstance, name: String) -> Result<bool, E
     Ok(result)
 }
 
+// --- Lazy Rows (zero-copy query results) ---
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn run_default_lazy(instance: ExDbInstance, payload: String) -> Result<ExLazyRows, ExError> {
+    let named_rows = instance.run_default(&payload)?;
+    let chain = ResourceArc::new(ExLazyRowsRef(flatten_named_rows(named_rows)));
+    Ok(ExLazyRows::from_chain(chain, 0))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn run_script_lazy(
+    instance: ExDbInstance,
+    payload: String,
+    params: HashMap<String, ExDataValue>,
+    immutable: bool,
+) -> Result<ExLazyRows, ExError> {
+    let mutability = if immutable {
+        cozo::ScriptMutability::Immutable
+    } else {
+        cozo::ScriptMutability::Mutable
+    };
+    let params = params
+        .into_iter()
+        .map(|(k, v)| (k, v.0))
+        .collect::<BTreeMap<String, cozo::DataValue>>();
+    let named_rows = instance.run_script(&payload, params, mutability)?;
+    let chain = ResourceArc::new(ExLazyRowsRef(flatten_named_rows(named_rows)));
+    Ok(ExLazyRows::from_chain(chain, 0))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn tx_run_script_lazy(
+    tx: ExMultiTransaction,
+    payload: String,
+    params: HashMap<String, ExDataValue>,
+) -> Result<ExLazyRows, ExError> {
+    let params = params
+        .into_iter()
+        .map(|(k, v)| (k, v.0))
+        .collect::<BTreeMap<String, cozo::DataValue>>();
+    let named_rows = tx.run_script(&payload, params)?;
+    let chain = ResourceArc::new(ExLazyRowsRef(flatten_named_rows(named_rows)));
+    Ok(ExLazyRows::from_chain(chain, 0))
+}
+
+#[rustler::nif]
+fn lazy_rows_next(lazy: ExLazyRows) -> Result<ExLazyRows, rustler::Atom> {
+    let next_idx = lazy.statement_index + 1;
+    if next_idx >= lazy.resource.0.len() {
+        Err(atoms::out_of_bounds())
+    } else {
+        Ok(ExLazyRows::from_chain(lazy.resource, next_idx))
+    }
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn lazy_rows_row_at(env: Env, lazy: ExLazyRows, index: usize) -> Result<Term, rustler::Atom> {
+    let nr = &lazy.resource.0[lazy.statement_index];
+    let row = nr.rows.get(index).ok_or(atoms::out_of_bounds())?;
+    Ok(row
+        .iter()
+        .map(|dv| encode_data_value(dv, env))
+        .collect::<Vec<Term>>()
+        .encode(env))
+}
+
+#[rustler::nif]
+fn lazy_rows_cell_at(
+    env: Env,
+    lazy: ExLazyRows,
+    row_index: usize,
+    col_index: usize,
+) -> Result<Term, rustler::Atom> {
+    let nr = &lazy.resource.0[lazy.statement_index];
+    let row = nr.rows.get(row_index).ok_or(atoms::out_of_bounds())?;
+    let cell = row.get(col_index).ok_or(atoms::out_of_bounds())?;
+    Ok(encode_data_value(cell, env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn lazy_rows_column_at(
+    env: Env,
+    lazy: ExLazyRows,
+    col_index: usize,
+) -> Result<Term, rustler::Atom> {
+    let nr = &lazy.resource.0[lazy.statement_index];
+    if col_index >= nr.headers.len() {
+        return Err(atoms::out_of_bounds());
+    }
+    Ok(nr
+        .rows
+        .iter()
+        .map(|row| encode_data_value(&row[col_index], env))
+        .collect::<Vec<Term>>()
+        .encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn lazy_rows_slice(
+    env: Env,
+    lazy: ExLazyRows,
+    offset: usize,
+    length: usize,
+) -> Result<Term, rustler::Atom> {
+    let nr = &lazy.resource.0[lazy.statement_index];
+    if offset > nr.rows.len() {
+        return Err(atoms::out_of_bounds());
+    }
+    let end = std::cmp::min(offset + length, nr.rows.len());
+    Ok(nr.rows[offset..end]
+        .iter()
+        .map(|row| {
+            row.iter()
+                .map(|dv| encode_data_value(dv, env))
+                .collect::<Vec<Term>>()
+                .encode(env)
+        })
+        .collect::<Vec<Term>>()
+        .encode(env))
+}
+
+#[rustler::nif(schedule = "DirtyCpu")]
+fn lazy_rows_to_named_rows(env: Env, lazy: ExLazyRows) -> Term {
+    let nr = &lazy.resource.0[lazy.statement_index];
+    encode_named_rows(nr, env)
+}
+
 #[rustler::nif]
 fn close_instance(instance: ExDbInstance) -> Result<rustler::Atom, ExError> {
     // Dropping the ExDbInstance causes the ResourceArc reference count to decrement.
@@ -303,6 +432,15 @@ rustler::init!(
         register_fixed_rule,
         respond_fixed_rule,
         unregister_fixed_rule,
+        run_default_lazy,
+        run_script_lazy,
+        tx_run_script_lazy,
+        lazy_rows_next,
+        lazy_rows_row_at,
+        lazy_rows_cell_at,
+        lazy_rows_column_at,
+        lazy_rows_slice,
+        lazy_rows_to_named_rows,
         close_instance
     ],
     load = on_load
