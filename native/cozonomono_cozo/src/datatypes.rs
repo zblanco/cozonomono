@@ -1,6 +1,17 @@
 use cozo::{DataValue, DbInstance, NamedRows};
+use rustler::types::map::MapIterator;
 use rustler::{Decoder, Encoder, Env, NifResult, NifStruct, ResourceArc, Term};
 use std::ops::Deref;
+
+mod atoms {
+    rustler::atoms! {
+        nil,
+        ok,
+        error,
+        validity,
+        json,
+    }
+}
 
 pub struct ExDbInstanceRef(pub DbInstance);
 
@@ -50,7 +61,6 @@ impl Encoder for ExNamedRows {
     fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
         let headers = self.headers.encode(env);
 
-        // Encode rows by manually handling DataValueWrapper
         let rows: Vec<Term<'a>> = self
             .0
             .rows
@@ -66,12 +76,10 @@ impl Encoder for ExNamedRows {
         let rows_term = rows.encode(env);
 
         let next = match &self.0.next {
-            Some(boxed_next) => ExNamedRows((**boxed_next).clone()).encode(env), // Recursively encode next if it exists
-            None => rustler::types::atom::nil().encode(env), // Encode as nil if there is no next
+            Some(boxed_next) => ExNamedRows((**boxed_next).clone()).encode(env),
+            None => atoms::nil().encode(env),
         };
 
-        // Construct a map or tuple to represent `NamedRows` in Erlang terms
-        // This is an example, adjust according to your needs
         let map = rustler::Term::map_new(env)
             .map_put("headers".encode(env), headers)
             .expect("Failed to encode headers")
@@ -97,18 +105,22 @@ impl Deref for ExDataValue {
 impl Encoder for ExDataValue {
     fn encode<'a>(&self, env: Env<'a>) -> Term<'a> {
         match &self.0 {
-            DataValue::Null => "nil".encode(env),
+            DataValue::Null => atoms::nil().encode(env),
             DataValue::Bool(value) => value.encode(env),
             DataValue::Num(number) => match number {
                 cozo::Num::Int(i) => i.encode(env),
                 cozo::Num::Float(f) => f.encode(env),
             },
             DataValue::Str(str) => str.as_str().encode(env),
-            DataValue::Bytes(bytes) => bytes.encode(env),
+            DataValue::Bytes(bytes) => bytes.as_slice().encode(env),
             DataValue::Uuid(cozo::UuidWrapper(uuid)) => uuid.to_string().encode(env),
             DataValue::Regex(cozo::RegexWrapper(regex)) => regex.to_string().encode(env),
-            // This is recursive
             DataValue::List(list) => list
+                .iter()
+                .map(|data_value| ExDataValue(data_value.clone()))
+                .collect::<Vec<ExDataValue>>()
+                .encode(env),
+            DataValue::Set(set) => set
                 .iter()
                 .map(|data_value| ExDataValue(data_value.clone()))
                 .collect::<Vec<ExDataValue>>()
@@ -117,9 +129,47 @@ impl Encoder for ExDataValue {
                 cozo::Vector::F32(f32_array) => f32_array.clone().into_raw_vec().encode(env),
                 cozo::Vector::F64(f64_array) => f64_array.clone().into_raw_vec().encode(env),
             },
-            DataValue::Json(cozo::JsonData(json)) => json.to_string().encode(env),
-            // Encode undefined values as nils
-            _ => "nil".encode(env),
+            DataValue::Json(cozo::JsonData(json)) => {
+                encode_json_value(json, env)
+            }
+            DataValue::Validity(validity) => {
+                let timestamp = validity.timestamp.0 .0;
+                let is_assert = validity.is_assert.0;
+                (atoms::validity(), timestamp, is_assert).encode(env)
+            }
+            DataValue::Bot => atoms::nil().encode(env),
+        }
+    }
+}
+
+/// Encode a serde_json::Value as a native Elixir term (maps, lists, strings, numbers, booleans, nil).
+fn encode_json_value<'a>(value: &serde_json::Value, env: Env<'a>) -> Term<'a> {
+    match value {
+        serde_json::Value::Null => atoms::nil().encode(env),
+        serde_json::Value::Bool(b) => b.encode(env),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                i.encode(env)
+            } else if let Some(f) = n.as_f64() {
+                f.encode(env)
+            } else {
+                atoms::nil().encode(env)
+            }
+        }
+        serde_json::Value::String(s) => s.as_str().encode(env),
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .map(|v| encode_json_value(v, env))
+            .collect::<Vec<Term<'a>>>()
+            .encode(env),
+        serde_json::Value::Object(map) => {
+            let mut term_map = Term::map_new(env);
+            for (k, v) in map {
+                term_map = term_map
+                    .map_put(k.as_str().encode(env), encode_json_value(v, env))
+                    .expect("Failed to encode JSON map entry");
+            }
+            term_map
         }
     }
 }
@@ -127,12 +177,13 @@ impl Encoder for ExDataValue {
 impl<'a> Decoder<'a> for ExDataValue {
     fn decode(term: Term<'a>) -> NifResult<Self> {
         match term.get_type() {
-            // Match against the term type and decode accordingly
             rustler::TermType::Atom => {
-                if term.atom_to_string()?.to_lowercase() == "nil" {
-                    Ok(ExDataValue(DataValue::Null))
-                } else {
-                    Err(rustler::Error::Atom("unexpected_atom"))
+                let atom_str = term.atom_to_string()?;
+                match atom_str.as_str() {
+                    "nil" => Ok(ExDataValue(DataValue::Null)),
+                    "true" => Ok(ExDataValue(DataValue::Bool(true))),
+                    "false" => Ok(ExDataValue(DataValue::Bool(false))),
+                    _ => Err(rustler::Error::Atom("unexpected_atom")),
                 }
             }
             rustler::TermType::List => {
@@ -145,22 +196,97 @@ impl<'a> Decoder<'a> for ExDataValue {
                     decoded_list.into_iter().map(|ev| ev.0).collect(),
                 )))
             }
-            _ => {
-                // Directly attempt to decode known types, fallback to complex type handling
-                let decoded = if let Ok(value) = term.decode::<bool>() {
-                    ExDataValue(DataValue::Bool(value))
-                } else if let Ok(value) = term.decode::<i64>() {
-                    ExDataValue(DataValue::Num(cozo::Num::Int(value)))
-                } else if let Ok(value) = term.decode::<f64>() {
-                    ExDataValue(DataValue::Num(cozo::Num::Float(value)))
-                } else if let Ok(value) = term.decode::<String>() {
-                    // Additional logic needed here for Uuid, Regex, Json
-                    ExDataValue(DataValue::Str(value.into()))
+            rustler::TermType::Map => {
+                // Check if this is a tagged tuple-style map or a plain JSON-like map.
+                // Decode Elixir maps as DataValue::Json via serde_json::Value::Object.
+                let json_value = decode_map_to_json(term)?;
+                Ok(ExDataValue(DataValue::Json(cozo::JsonData(json_value))))
+            }
+            rustler::TermType::Binary => {
+                // Try to decode as UTF-8 string first.
+                // If it's a valid string, check if it's a UUID format.
+                if let Ok(s) = term.decode::<String>() {
+                    if let Ok(uuid) = uuid::Uuid::parse_str(&s) {
+                        Ok(ExDataValue(DataValue::Uuid(cozo::UuidWrapper(uuid))))
+                    } else {
+                        Ok(ExDataValue(DataValue::Str(s.into())))
+                    }
                 } else {
-                    // Handle other complex types like Bytes, Vec, Uuid, Regex, and Json here
-                    return Err(rustler::Error::Atom("unsupported_type"));
-                };
-                Ok(decoded)
+                    // Not valid UTF-8 — treat as raw bytes
+                    let bytes = term.decode::<Vec<u8>>()?;
+                    Ok(ExDataValue(DataValue::Bytes(bytes)))
+                }
+            }
+            _ => {
+                // Try numeric types
+                if let Ok(value) = term.decode::<bool>() {
+                    Ok(ExDataValue(DataValue::Bool(value)))
+                } else if let Ok(value) = term.decode::<i64>() {
+                    Ok(ExDataValue(DataValue::Num(cozo::Num::Int(value))))
+                } else if let Ok(value) = term.decode::<f64>() {
+                    Ok(ExDataValue(DataValue::Num(cozo::Num::Float(value))))
+                } else {
+                    Err(rustler::Error::Atom("unsupported_type"))
+                }
+            }
+        }
+    }
+}
+
+/// Recursively decode an Elixir map term into a serde_json::Value::Object.
+fn decode_map_to_json(term: Term<'_>) -> NifResult<serde_json::Value> {
+    let iter = MapIterator::new(term).ok_or(rustler::Error::Atom("invalid_map"))?;
+
+    let mut map = serde_json::Map::new();
+    for (key, value) in iter {
+        let key_str = key
+            .decode::<String>()
+            .map_err(|_| rustler::Error::Atom("json_keys_must_be_strings"))?;
+        let json_value = decode_term_to_json(value)?;
+        map.insert(key_str, json_value);
+    }
+    Ok(serde_json::Value::Object(map))
+}
+
+/// Recursively decode any Elixir term into a serde_json::Value.
+fn decode_term_to_json(term: Term<'_>) -> NifResult<serde_json::Value> {
+    match term.get_type() {
+        rustler::TermType::Atom => {
+            let atom_str = term.atom_to_string()?;
+            match atom_str.as_str() {
+                "nil" => Ok(serde_json::Value::Null),
+                "true" => Ok(serde_json::Value::Bool(true)),
+                "false" => Ok(serde_json::Value::Bool(false)),
+                _ => Ok(serde_json::Value::String(atom_str)),
+            }
+        }
+        rustler::TermType::List => {
+            let list = term.decode::<Vec<Term>>()?;
+            let arr = list
+                .iter()
+                .map(|item| decode_term_to_json(*item))
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(serde_json::Value::Array(arr))
+        }
+        rustler::TermType::Map => decode_map_to_json(term),
+        rustler::TermType::Binary => {
+            let s = term
+                .decode::<String>()
+                .map_err(|_| rustler::Error::Atom("json_string_must_be_utf8"))?;
+            Ok(serde_json::Value::String(s))
+        }
+        _ => {
+            if let Ok(value) = term.decode::<bool>() {
+                Ok(serde_json::Value::Bool(value))
+            } else if let Ok(value) = term.decode::<i64>() {
+                Ok(serde_json::Value::Number(value.into()))
+            } else if let Ok(value) = term.decode::<f64>() {
+                match serde_json::Number::from_f64(value) {
+                    Some(n) => Ok(serde_json::Value::Number(n)),
+                    None => Ok(serde_json::Value::Null), // NaN/Infinity can't be JSON
+                }
+            } else {
+                Err(rustler::Error::Atom("unsupported_json_type"))
             }
         }
     }

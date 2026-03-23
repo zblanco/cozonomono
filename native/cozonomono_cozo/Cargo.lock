@@ -323,7 +323,9 @@ version = "0.1.0"
 dependencies = [
  "cozo",
  "rustler",
+ "serde_json",
  "thiserror",
+ "uuid",
 ]
 
 [[package]]
