@@ -27,3 +27,4 @@ cozonomono-*.tar
 
 /priv/native/*
 /.bench/
+.codex

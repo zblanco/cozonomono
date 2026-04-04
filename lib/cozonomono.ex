@@ -1,6 +1,19 @@
 defmodule Cozonomono do
   @moduledoc """
-  Documentation for `Cozonomono`.
+  Elixir bindings for CozoDB.
+
+  Cozonomono is intentionally thin around the core Cozo query model:
+
+  - use `query/3` for most CozoScript
+  - use `query_lazy/3` when you want zero-copy result access
+  - use the wrapper helpers in this module for lifecycle, transactions, system
+    ops, data movement, callbacks, fixed rules, and index management
+
+  See also:
+
+  - `README.md` for the quick start
+  - `CHEATSHEET.md` for the API map
+  - the guides in `guides/` for concept-oriented examples
   """
 
   alias Cozonomono.FixedRuleBridge
