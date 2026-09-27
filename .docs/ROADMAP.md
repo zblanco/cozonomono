@@ -4,113 +4,127 @@
 
 The library currently exposes a minimal working surface:
 
-- **Database lifecycle**: `Cozonomono.new/2` — create an in-memory, SQLite, or RocksDB instance
+- **Database lifecycle**: `Cozonomono.new/2` — create an in-memory, SQLite, or RocksDB instance; `Cozonomono.close/1` — explicitly release resources
 - **Query execution**: `Cozonomono.query/3` — run CozoScript with optional params and immutability flag
-- **Data encoding**: Manual `Encoder`/`Decoder` for `DataValue` (handles null, bool, int, float, string, bytes, uuid, list, vec, json) and manual `Encoder` for `NamedRows` (returns a plain map with string keys)
-
-### Known Gaps in the PoC
-- `ExNamedRows` returns a plain map with string keys (`%{"headers" => ..., "rows" => ..., "next" => ...}`) — should return a proper Elixir struct
-- `ExDataValue` decoder doesn't handle bytes, uuid, or json input from Elixir
-- `ExDataValue` encoder maps `Null` to the string `"nil"` instead of the atom `nil`
-- No resource cleanup / explicit close for database instances
-- No support for multi-statement transactions, import/export, backup/restore, callbacks, or custom fixed rules
+- **Data encoding**: Manual `Encoder`/`Decoder` for `DataValue` (handles null, bool, int, float, string, bytes, uuid, list, vec, json) and manual `Encoder` for `NamedRows` (returns a proper `%Cozonomono.NamedRows{}` struct)
 
 ---
 
-## Phase 1: Solidify Core & Fix PoC Issues
+## Phase 1: Solidify Core & Fix PoC Issues ✅
 
-### 1.1 Fix DataValue Encoding/Decoding
-- [ ] Encode `DataValue::Null` as atom `nil` not string `"nil"`
-- [ ] Add `Decoder` support for binary/bytes (Elixir binary → `DataValue::Bytes`)
-- [ ] Add `Decoder` support for UUID (string or structured → `DataValue::Uuid`)
-- [ ] Add `Decoder` support for JSON (map → `DataValue::Json`)
-- [ ] Handle `DataValue::Set` and `DataValue::Validity` encoding to Elixir terms
-- [ ] Consider using `rustler::atoms!` for commonly used atoms (`nil`, `true`, `false`, `ok`, `error`)
+### 1.1 Fix DataValue Encoding/Decoding ✅
+- [x] Encode `DataValue::Null` as atom `nil` not string `"nil"`
+- [x] Add `Decoder` support for binary/bytes (Elixir binary → `DataValue::Bytes`)
+- [x] Add `Decoder` support for UUID (string or structured → `DataValue::Uuid`)
+- [x] Add `Decoder` support for JSON (map → `DataValue::Json`)
+- [x] Handle `DataValue::Set` and `DataValue::Validity` encoding to Elixir terms
+- [x] Using `rustler::atoms!` for commonly used atoms (`nil`, `ok`, `error`, `validity`, etc.)
 
-### 1.2 Proper NamedRows Struct
-- [ ] Create `Cozonomono.NamedRows` Elixir struct with typed fields
-- [ ] Option A: Use `#[derive(NifStruct)]` on a new `ExNamedRows` struct (requires `next` to be encodable)
-- [ ] Option B: Keep manual `Encoder` but return a proper `%Cozonomono.NamedRows{}` struct via NifStruct-compatible map construction
-- [ ] Support the `next` chain for multi-statement script results as a linked list of NamedRows
+### 1.2 Proper NamedRows Struct ✅
+- [x] Created `Cozonomono.NamedRows` Elixir struct with typed fields (`headers`, `rows`, `next`)
+- [x] Rust `ExNamedRows` encoder builds a proper `%Cozonomono.NamedRows{}` struct via `__struct__` key in the encoded map
+- [x] Supports the `next` chain for multi-statement script results (recursive encoding)
+- [x] All query results now return `{:ok, %Cozonomono.NamedRows{}}` instead of `{:ok, %{"headers" => ...}}`
 
-### 1.3 Instance Lifecycle
-- [ ] Add `Cozonomono.close/1` NIF to explicitly drop the `DbInstance` (or document reliance on GC)
-- [ ] Verify resource cleanup behavior — when the Elixir reference is garbage collected, the Rust `ResourceArc` should drop the `DbInstance`
+### 1.3 Instance Lifecycle ✅
+- [x] Added `Cozonomono.close/1` NIF for explicit resource release
+- [x] Verified resource cleanup behavior — `ResourceArc` reference counting handles GC cleanup automatically
+- [x] Tested with file-backed SQLite engine
+- [x] Documented that `close/1` is optional but useful for deterministic cleanup of file-backed engines
 
 ---
 
 ## Phase 2: Complete CozoDB API Surface
 
-### 2.1 Import / Export
-- [ ] `export_relations/2` — `fn export_relations(instance, relation_names) -> {:ok, %{String.t() => NamedRows.t()}}`
-- [ ] `import_relations/2` — `fn import_relations(instance, data) -> :ok | {:error, term()}`
-- [ ] Decide on data format: use NamedRows structs or raw maps for the import payload
-- [ ] NIF: `export_relations` wrapping `DbInstance::export_relations`
-- [ ] NIF: `import_relations` wrapping `DbInstance::import_relations`
+### 2.1 Import / Export ✅
+- [x] `export_relations/2` — `fn export_relations(instance, relation_names) -> {:ok, %{String.t() => NamedRows.t()}}`
+- [x] `import_relations/2` — `fn import_relations(instance, data) -> :ok | {:error, term()}`
+- [x] Decide on data format: use NamedRows structs or raw maps for the import payload — **chose NamedRows structs** for type safety and consistency with query results
+- [x] NIF: `export_relations` wrapping `DbInstance::export_relations`
+- [x] NIF: `import_relations` wrapping `DbInstance::import_relations`
 
-### 2.2 Backup / Restore
-- [ ] `backup/2` — `fn backup(instance, path) -> :ok | {:error, term()}`
-- [ ] `restore/2` — `fn restore(instance, path) -> :ok | {:error, term()}`
-- [ ] `import_from_backup/3` — selective relation import from a SQLite backup file
-- [ ] All three wrap the corresponding `DbInstance` methods
+### 2.2 Backup / Restore ✅
+- [x] `backup/2` — `fn backup(instance, path) -> :ok | {:error, term()}`
+- [x] `restore/2` — `fn restore(instance, path) -> :ok | {:error, term()}`
+- [x] `import_from_backup/3` — selective relation import from a SQLite backup file
+- [x] All three wrap the corresponding `DbInstance` methods
 
-### 2.3 Multi-Statement Transactions
-- [ ] `multi_transaction/2` — create a transaction handle (write or read-only)
-- [ ] `tx_run/3` — run a script within the transaction
-- [ ] `tx_commit/1` — commit the transaction
-- [ ] `tx_abort/1` — abort the transaction
-- [ ] Rust side: wrap `DbInstance::multi_transaction` which returns a `MultiTransaction` — this needs its own resource type (`ExMultiTransactionRef` / `ExMultiTransaction`)
-- [ ] Consider ownership model: the `MultiTransaction` holds a mutable borrow, so concurrent access must be prevented or serialized
+### 2.3 Multi-Statement Transactions ✅
+- [x] `multi_transaction/2` — create a transaction handle (write or read-only)
+- [x] `tx_query/3` — run a script within the transaction (named `tx_query` for consistency with `query/3`)
+- [x] `tx_commit/1` — commit the transaction
+- [x] `tx_abort/1` — abort the transaction
+- [x] Rust side: wrap `DbInstance::multi_transaction` which returns a `MultiTransaction` — uses `ExMultiTransactionRef` / `ExMultiTransaction` resource types following the two-type pattern
+- [x] Ownership model: `MultiTransaction` uses crossbeam bounded channels internally — CozoDB spawns a dedicated thread that holds the actual transaction lock, and the NIF communicates via send/recv, so the BEAM scheduler is not blocked and concurrent access is serialized by the channel
 
-### 2.4 System Operations (Schema Introspection)
-These are all just CozoScript queries run via `run_script`, but we should provide convenience functions:
-- [ ] `list_relations/1` — `::relations`
-- [ ] `list_columns/2` — `::columns <relation>`
-- [ ] `list_indices/2` — `::indices <relation>`
-- [ ] `remove_relation/2` — `::remove <relation>`
-- [ ] `rename_relation/3` — `::rename <relation> <new_name>`
-- [ ] `describe_relation/3` — `::describe <relation> '<description>'`
-- [ ] `explain/2` — `::explain { <query> }`
-- [ ] `list_running/1` — `::running`
-- [ ] `kill_running/2` — `::kill <id>`
-- [ ] `compact/1` — `::compact`
+### 2.4 System Operations (Schema Introspection) ✅
+These are all just CozoScript queries run via `run_script`, but we provide convenience functions:
+- [x] `list_relations/1` — `::relations`
+- [x] `list_columns/2` — `::columns <relation>`
+- [x] `list_indices/2` — `::indices <relation>`
+- [x] `remove_relation/2` — `::remove <relation>` (also accepts a list)
+- [x] `rename_relation/3` — `::rename <old> -> <new>`
+- [ ] `describe_relation/3` — `::describe <relation> '<description>'` — **skipped: grammar bug in cozo 0.7.6** (`describe_relation_op` defined in pest grammar but not included in `sys_script` alternation, so it parses as invalid input)
+- [x] `explain/2` — `::explain { <query> }`
+- [x] `list_running/1` — `::running`
+- [x] `kill_running/2` — `::kill <id>`
+- [x] `compact/1` — `::compact`
 
 ---
 
 ## Phase 3: Advanced Features
 
-### 3.1 Change Callbacks
-- [ ] `register_callback/3` — wraps `DbInstance::register_callback`, returns `{id, pid}` where a GenServer or process receives `{:cozo_callback, op, new_rows, old_rows}` messages
-- [ ] `unregister_callback/2` — wraps `DbInstance::unregister_callback`
-- [ ] Rust side: spawn a thread that reads from the crossbeam `Receiver` and sends Erlang messages via `OwnedEnv` / `env.send()`
-- [ ] This is the most complex NIF integration — crossbeam channels must bridge to BEAM message passing
+### 3.1 Change Callbacks ✅
+- [x] `register_callback/3` — wraps `DbInstance::register_callback`, returns `{:ok, callback_id}` where the target process receives `{:cozo_callback, op, new_rows, old_rows}` messages
+- [x] `unregister_callback/2` — wraps `DbInstance::unregister_callback`, returns boolean
+- [x] Rust side: spawns a `std::thread` that reads from the crossbeam `Receiver` and sends Erlang messages via `OwnedEnv::send_and_clear`
+- [x] Supports `:pid` option to direct callbacks to any process, and `:capacity` option for bounded channels (backpressure)
+- [x] 9 tests covering put/rm callbacks, multiple callbacks, unregistration, custom pid, bounded capacity
 
-### 3.2 Custom Fixed Rules
-- [ ] `register_fixed_rule/3` — register a custom algorithm callable via `<~` in CozoScript
-- [ ] Consider using `SimpleFixedRule` for the common case (closure-based)
-- [ ] Rust side: the callback must call back into Elixir or accept a Rust closure — evaluate feasibility
-- [ ] Alternative: accept the rule implementation as a Rust module compiled into the NIF crate (less dynamic but simpler)
+### 3.2 Custom Fixed Rules ✅
+- [x] `register_fixed_rule/4` — register a custom algorithm callable via `<~` in CozoScript, using `SimpleFixedRule::rule_with_channel` for the channel-based bridge pattern
+- [x] `respond_fixed_rule/3` — send computed results back from Elixir to the blocked CozoDB rule invocation
+- [x] `unregister_fixed_rule/2` — remove a registered custom fixed rule
+- [x] Rust side: bridge resource (`ExFixedRuleBridge`) with pending request map, forwarding thread, and per-invocation crossbeam channel responses
+- [x] Supports concurrent rule invocations via request ID mapping
+- [x] 5 tests covering basic invocation, input relations, options, multiple invocations, and unregistration
 
-### 3.3 Index Management Helpers
+### 3.3 Index Management Helpers ✅
 Convenience functions wrapping CozoScript system ops:
-- [ ] `create_index/3` — `::index create <relation>:<index_name> {<columns>}`
-- [ ] `create_hnsw_index/3` — `::hnsw create ...`
-- [ ] `create_fts_index/3` — `::fts create ...`
-- [ ] `create_lsh_index/3` — `::lsh create ...`
-- [ ] `drop_index/3` — `::index drop <relation>:<index_name>`
+- [x] `create_index/4` — `::index create <relation>:<index_name> {<columns>}`
+- [x] `create_hnsw_index/4` — `::hnsw create ...` (vector search)
+- [x] `create_fts_index/4` — `::fts create ...` (full-text search)
+- [x] `create_lsh_index/4` — `::lsh create ...` (MinHash LSH)
+- [x] `drop_index/3` — `::index drop <relation>:<index_name>` (works for all index types)
+- [x] 8 tests covering standard, FTS, HNSW, and LSH indices with create/list/drop
 
-### 3.4 Access Level Management
-- [ ] `set_access_level/3` — `::set_access <relation> <level>` where level is `:normal | :protected | :read_only | :hidden`
+### 3.4 Access Level Management ✅
+- [x] `set_access_level/3` — `::access_level <level> <relations>` where level is `:normal | :protected | :read_only | :hidden`
+- [x] Accepts a single relation name or a list of names
+- [x] 5 tests covering read_only, protected, hidden, restore to normal, and multi-relation
 
 ---
 
 ## Phase 4: Ergonomics & Performance
 
-### 4.1 Zero-Copy Opportunities
-Following Explorer's patterns:
-- [ ] Evaluate whether `DataValue::Vec` (F32/F64 arrays) can be returned as zero-copy BEAM binaries pointing into the Rust resource via `resource.make_binary_unsafe`
-- [ ] For bulk data export, consider returning column-oriented data instead of row-oriented to enable zero-copy binary slices for numeric columns
-- [ ] Profile the `ExDataValue` encoding hot path — if row counts are large, manual encoding with pre-computed atom keys (like Explorer does) will outperform the current approach
+### 4.1 Zero-Copy Opportunities ✅
+- [x] Refactored `ExDataValue` and `ExNamedRows` Encoder impls to use borrow-based helper functions (`encode_data_value`, `encode_named_rows`) — eliminates unnecessary cloning of `DataValue`, `NamedRows`, and `Vec` arrays during encoding
+- [x] Added `ExLazyRowsRef` resource type wrapping `Vec<NamedRows>` (flattened chain) on the Rust heap
+- [x] Added `ExLazyRows` NifStruct mapping to `%Cozonomono.LazyRows{}` with metadata fields (headers, row_count, column_count, has_next)
+- [x] Added lazy query NIFs: `run_default_lazy`, `run_script_lazy`, `tx_run_script_lazy`
+- [x] Added accessor NIFs: `lazy_rows_row_at`, `lazy_rows_cell_at`, `lazy_rows_column_at`, `lazy_rows_slice`, `lazy_rows_to_named_rows`, `lazy_rows_next`
+- [x] Added `Cozonomono.LazyRows` Elixir module with `row_at/2`, `cell_at/3`, `column_at/2`, `column/2`, `slice/3`, `to_named_rows/1`, `next/1`
+- [x] Added `Cozonomono.query_lazy/3` and `Cozonomono.tx_query_lazy/3`
+- [x] Backward-compatible: existing `query/3` API unchanged
+- [x] 22 new tests (112 total), benchmarks in `.bench/`
+- [x] Benchmarked: cell access 27,000x faster than full eager query, row access 18,000x faster, single column extraction 170x faster for 10k row result sets
+
+#### 4.1.1 Enumerable & Stream Support for LazyRows ✅
+- [x] `LazyRows.Iterator` — private struct implementing `Enumerable` with chunked `slice` callback (1000-row batches per NIF call) and smart `reduce` that amortizes NIF boundary crossing
+- [x] `LazyRows.to_enum/1` — explicit opt-in returning the iterator (following Explorer's pattern of not implementing `Enumerable` directly on the data type)
+- [x] `LazyRows.to_stream/2` — returns an Elixir `Stream` via `Stream.resource/3` with configurable `chunk_size` for bounded-memory processing of large result sets
+- [x] `Enumerable.count/1` returns row count in O(1) from metadata, `slice/1` does bulk NIF fetch, `member?/2` defers to reduce fallback to make O(n) cost visible
+- [x] 14 new tests (126 total) covering `Enum.count`, `Enum.take`, `Enum.at`, `Enum.map`, `Enum.reduce_while`, `Enum.to_list`, `Enum.zip`, `Stream.take`, `Stream.filter`, empty results
 
 ### 4.2 Query Builder (Optional)
 - [ ] Consider a CozoScript query builder DSL in Elixir for type-safe query construction

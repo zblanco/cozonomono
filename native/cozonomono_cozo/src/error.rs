@@ -4,13 +4,15 @@ use thiserror::Error;
 #[derive(Error, Debug)]
 pub enum ExError {
     #[error("Cozo Error: {0}")]
-    Cozo(cozo::Error),
+    Cozo(String),
+    #[error("Fixed Rule Error: {0}")]
+    FixedRule(String),
 }
 
 // cozo::Error does not implement std::error::Error
 impl From<cozo::Error> for ExError {
     fn from(error: cozo::Error) -> Self {
-        ExError::Cozo(error)
+        ExError::Cozo(format!("{error:?}"))
     }
 }
 

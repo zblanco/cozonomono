@@ -37,6 +37,7 @@ The Elixir struct (`%Cozonomono.Instance{resource: ref, engine: engine, path: pa
 - `lib/cozonomono.ex` — Public API module
 - `lib/cozonomono/native.ex` — NIF stub declarations (uses `RustlerPrecompiled`)
 - `lib/cozonomono/instance.ex` — Elixir struct matching the Rust `ExDbInstance` NifStruct
+- `lib/cozonomono/named_rows.ex` — Elixir struct for query results (built manually by Rust encoder via `__struct__` key)
 - `native/cozonomono_cozo/src/lib.rs` — NIF function implementations and `rustler::init!`
 - `native/cozonomono_cozo/src/datatypes.rs` — Resource types, `ExDbInstance`, `ExNamedRows`, `ExDataValue` encoding/decoding
 - `native/cozonomono_cozo/src/error.rs` — Error type with `thiserror` and `rustler::Encoder`
@@ -53,7 +54,7 @@ The Elixir struct (`%Cozonomono.Instance{resource: ref, engine: engine, path: pa
 - **CozoScript** — Datalog-based query language with extensions for DDL, system ops, and imperative control flow
 - **Storage engines** — `mem` (in-memory), `sqlite` (persistent, also used for backup format), `rocksdb` (best throughput)
 - **`DbInstance`** — The non-generic Rust entry point that dispatches to the correct storage backend; this is what we wrap
-- **`NamedRows`** — Query result type: `{headers, rows, next}` where `next` chains multi-statement results
+- **`NamedRows`** — Query result type mapped to `%Cozonomono.NamedRows{headers, rows, next}` where `next` chains multi-statement results
 - **`DataValue`** — CozoDB's universal value enum: Null, Bool, Num, Str, Bytes, Uuid, List, Vec, Json, etc.
 
 ## Code Style & Conventions
