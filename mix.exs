@@ -38,7 +38,7 @@ defmodule Cozonomono.MixProject do
       {:bandit, "~> 1.0", only: :dev},
       {:ex_doc, "~> 0.38", only: :dev, runtime: false},
       {:usage_rules, "~> 1.2", only: :dev, runtime: false},
-      {:rustler, "~> 0.30.0", optional: not (@dev? or @force_build?)},
+      {:rustler, "~> 0.36", optional: not (@dev? or @force_build?)},
       {:benchee, "~> 1.3", only: :dev}
     ]
   end

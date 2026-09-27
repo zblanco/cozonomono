@@ -412,36 +412,4 @@ fn close_instance(instance: ExDbInstance) -> Result<rustler::Atom, ExError> {
     Ok(rustler::types::atom::ok())
 }
 
-rustler::init!(
-    "Elixir.Cozonomono.Native",
-    [
-        create_instance,
-        run_default,
-        run_script,
-        export_relations,
-        import_relations,
-        backup_db,
-        restore_backup,
-        import_from_backup,
-        multi_transaction,
-        tx_run_script,
-        tx_commit,
-        tx_abort,
-        register_callback,
-        unregister_callback,
-        register_fixed_rule,
-        respond_fixed_rule,
-        unregister_fixed_rule,
-        run_default_lazy,
-        run_script_lazy,
-        tx_run_script_lazy,
-        lazy_rows_next,
-        lazy_rows_row_at,
-        lazy_rows_cell_at,
-        lazy_rows_column_at,
-        lazy_rows_slice,
-        lazy_rows_to_named_rows,
-        close_instance
-    ],
-    load = on_load
-);
+rustler::init!("Elixir.Cozonomono.Native", load = on_load);
